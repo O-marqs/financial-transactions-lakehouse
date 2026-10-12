@@ -1,42 +1,77 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 03 · Gold: indicadores simples
-# MAGIC Uma tabela por estabelecimento, categoria e dia; outra por dia.
-# MAGIC Valor tentado inclui todas as situações. Valor concluído inclui apenas `concluida`.
-# MAGIC Valor transacionado não é receita da plataforma: não temos dados de tarifas ou custos.
+# MAGIC # 03 · Gold: criar indicadores com SQL
+# MAGIC A camada Gold resume os dados para análise.
+# MAGIC Vamos usar SELECT, WHERE, GROUP BY, COUNT, SUM e AVG.
+# MAGIC Os indicadores consideram apenas transações concluídas e os valores estão em BRL.
 
 # COMMAND ----------
 
-# MAGIC %run ./configuracao
+CATALOGO = "workspace"  # Use o mesmo catálogo do notebook 00.
+ESQUEMA = "fintech_lakehouse_pt"
+BASE = f"`{CATALOGO}`.`{ESQUEMA}`"
+
+# Uma visão temporária permite consultar o DataFrame nas células SQL abaixo.
+spark.table(f"{BASE}.silver_transacoes").createOrReplaceTempView("transacoes")
 
 # COMMAND ----------
 
-
-def calcular_indicadores(silver):
-    estabelecimentos = silver.groupBy("estabelecimento", "categoria", "data_transacao").agg(
-        F.count("*").alias("total_transacoes"),
-        F.sum("valor_usd").alias("valor_tentado_usd"),
-        F.sum(F.when(F.col("situacao") == "concluida", F.col("valor_usd")).otherwise(0))
-            .alias("valor_concluido_usd"),
-        F.round(F.avg("valor_usd"), 2).alias("valor_medio_usd"),
-    )
-    diario = silver.groupBy("data_transacao").agg(
-        F.count("*").alias("total_transacoes"),
-        F.sum(F.when(F.col("situacao") == "concluida", F.col("valor_usd")).otherwise(0))
-            .alias("valor_concluido_usd"),
-        F.sum(F.when(F.col("situacao") == "falhou", 1).otherwise(0)).alias("total_falhas"),
-        F.countDistinct("id_usuario").alias("usuarios_ativos"),
-    ).withColumn("percentual_falhas", F.round(F.col("total_falhas") / F.col("total_transacoes") * 100, 2))
-    return estabelecimentos, diario
-
-
-silver = spark.table(SILVER)
-estabelecimentos, diario = calcular_indicadores(silver)
+# MAGIC %md
+# MAGIC ## Resumo por estabelecimento
 
 # COMMAND ----------
 
-estabelecimentos.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(GOLD_ESTABELECIMENTOS)
-diario.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(GOLD_DIARIO)
-display(spark.table(GOLD_ESTABELECIMENTOS).orderBy(F.desc("valor_concluido_usd")))
-display(spark.table(GOLD_DIARIO).orderBy("data_transacao"))
-print("Execute 04_validacao.")
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TEMP VIEW resumo_estabelecimentos AS
+# MAGIC SELECT
+# MAGIC   estabelecimento,
+# MAGIC   categoria,
+# MAGIC   COUNT(*) AS transacoes_concluidas,
+# MAGIC   SUM(valor) AS valor_total_brl,
+# MAGIC   ROUND(AVG(valor), 2) AS ticket_medio_brl
+# MAGIC FROM transacoes
+# MAGIC WHERE situacao = 'concluida'
+# MAGIC GROUP BY estabelecimento, categoria
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Resumo por dia
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TEMP VIEW resumo_diario AS
+# MAGIC SELECT
+# MAGIC   data_transacao,
+# MAGIC   COUNT(*) AS transacoes_concluidas,
+# MAGIC   SUM(valor) AS valor_total_brl,
+# MAGIC   COUNT(DISTINCT id_usuario) AS usuarios_ativos
+# MAGIC FROM transacoes
+# MAGIC WHERE situacao = 'concluida'
+# MAGIC GROUP BY data_transacao
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Salvar as tabelas Gold com PySpark
+
+# COMMAND ----------
+
+spark.table("resumo_estabelecimentos").write.format("delta").mode("overwrite").option(
+    "overwriteSchema", "true"
+).saveAsTable(f"{BASE}.gold_estabelecimentos")
+
+spark.table("resumo_diario").write.format("delta").mode("overwrite").option(
+    "overwriteSchema", "true"
+).saveAsTable(f"{BASE}.gold_indicadores_diarios")
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT * FROM resumo_estabelecimentos ORDER BY valor_total_brl DESC
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT * FROM resumo_diario ORDER BY data_transacao

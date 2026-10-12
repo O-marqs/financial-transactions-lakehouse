@@ -1,3 +1,0 @@
-# Somente para testes locais. Não instale estas dependências nos notebooks do Databricks.
-pyspark==3.5.1
-pytest>=8.0,<9.0

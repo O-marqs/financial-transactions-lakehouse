@@ -1,95 +1,66 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 00 · Criar a estrutura e gerar dados
-# MAGIC Projeto de estágio: CSV → Bronze → Silver e quarentena → Gold.
-# MAGIC Importe os seis notebooks na mesma pasta, ajuste o catálogo em `configuracao`
-# MAGIC e conecte ao processamento **Serverless**. Execute 00 → 01 → 02 → 03 → 04.
+# MAGIC # 00 · Gerar os dados
+# MAGIC Vamos criar uma amostra de transações financeiras com Python e salvar em CSV.
+# MAGIC Os dados são fictícios e os valores estão em reais (BRL).
+# MAGIC Altere o catálogo abaixo e execute os notebooks na ordem 00 → 01 → 02 → 03.
 
 # COMMAND ----------
 
-# MAGIC %run ./configuracao
-
-# COMMAND ----------
+CATALOGO = "workspace"  # Use o nome do catálogo do seu Databricks.
+ESQUEMA = "fintech_lakehouse_pt"
+BASE = f"`{CATALOGO}`.`{ESQUEMA}`"
+ENTRADA = f"/Volumes/{CATALOGO}/{ESQUEMA}/entrada/dados_basicos"
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {BASE}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {BASE}.entrada")
-dbutils.fs.mkdirs(ENTRADA)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Gerar 5.000 transações sintéticas
-# MAGIC A semente fixa e os IDs numerados permitem repetir a mesma amostra.
-# MAGIC Alguns valores negativos, nulos e duplicados são incluídos para testar a qualidade.
+# MAGIC ## Criar a amostra com Python
+# MAGIC A lista guarda os registros. O laço `for` gera uma transação por vez.
+# MAGIC Incluímos valores negativos, usuários vazios e duplicatas para praticar a limpeza.
 
 # COMMAND ----------
 
-import csv
-import io
 import random
-from datetime import datetime, timedelta
+from datetime import date, timedelta
 
+random.seed(42)
+transacoes = []
+lojas = {"Amazon": "comercio", "Starbucks": "alimentacao", "Shell": "combustivel",
+         "Netflix": "assinatura", "Uber": "transporte"}
 
-def gerar_transacoes():
-    gerador = random.Random(42)
-    lojas = {"Amazon": "comercio_eletronico", "Starbucks": "alimentacao",
-             "Shell": "combustivel", "Netflix": "assinatura", "Uber": "transporte"}
-    transacoes = []
-    for indice in range(5000):
-        loja = gerador.choice(list(lojas))
-        valor = round(gerador.uniform(1, 1000), 2)
-        horario = datetime(2024, 1, 1) + timedelta(days=indice // 500,
-                                                  seconds=gerador.randint(0, 86399))
-        linha = {
-            "id_transacao": f"TXN_{indice:05d}",
-            "id_usuario": f"USR_{gerador.randint(1, 500):05d}",
-            "estabelecimento": loja, "categoria": lojas[loja], "valor": f"{valor:.2f}",
-            "moeda": gerador.choice(["USD", "EUR", "GBP", "CAD"]),
-            "tipo_cartao": gerador.choice(["credito", "debito"]), "pais": "BR",
-            "online": gerador.choice(["true", "false"]),
-            "data_hora": horario.strftime("%Y-%m-%d %H:%M:%S"),
-            "situacao": gerador.choices(["concluida", "pendente", "falhou"], [90, 7, 3])[0],
-        }
-        if indice % 100 == 0:
-            linha["valor"] = "-10.00"
-        elif indice % 100 == 1:
-            linha["id_usuario"] = ""
-        elif indice % 100 == 2:
-            linha["valor"] = "valor_invalido"
-        elif indice % 100 == 3:
-            linha["id_transacao"] = transacoes[-1]["id_transacao"]
-        transacoes.append(linha)
-    return transacoes
+for numero in range(1, 5001):
+    loja = random.choice(list(lojas))
+    registro = {
+        "id_transacao": f"TXN_{numero:05d}",
+        "id_usuario": f"USR_{random.randint(1, 500):05d}",
+        "estabelecimento": loja,
+        "categoria": lojas[loja],
+        "valor": f"{random.randint(100, 100000) / 100:.2f}",
+        "data_transacao": str(date(2024, 1, 1) + timedelta(days=(numero - 1) // 500)),
+        "situacao": random.choice(["concluida", "concluida", "concluida", "pendente", "falhou"]),
+    }
+    if numero % 100 == 0:
+        registro["valor"] = "-10.00"
+    if numero % 100 == 1:
+        registro["id_usuario"] = ""
+    transacoes.append(registro)
 
-
-transacoes = gerar_transacoes()
+# Repetir cinco registros iguais para demonstrar a remoção de duplicatas.
+transacoes.extend(transacoes[:5])
+dados = spark.createDataFrame(transacoes)
+display(dados.limit(5))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Gravar dez arquivos CSV
-# MAGIC Repetir esta etapa confere os arquivos existentes. Ela não substitui conteúdo divergente.
+# MAGIC ## Salvar os arquivos CSV no volume
+# MAGIC `overwrite` substitui a amostra deste projeto quando executamos novamente.
 
 # COMMAND ----------
 
-existentes = {arquivo.name for arquivo in dbutils.fs.ls(ENTRADA)}
-nomes_esperados = {f"lote_{numero:02d}.csv" for numero in range(10)}
-if existentes - nomes_esperados:
-    raise ValueError("Há arquivos inesperados na entrada. Use outro esquema para uma nova amostra.")
-
-for numero in range(10):
-    arquivo = io.StringIO(newline="")
-    escritor = csv.DictWriter(arquivo, fieldnames=COLUNAS, lineterminator="\n")
-    escritor.writeheader()
-    escritor.writerows(transacoes[numero * 500:(numero + 1) * 500])
-    conteudo = arquivo.getvalue()
-    nome = f"lote_{numero:02d}.csv"
-    caminho = f"{ENTRADA}/{nome}"
-    if nome in existentes:
-        if dbutils.fs.head(caminho, maxBytes=len(conteudo.encode("utf-8")) + 1) != conteudo:
-            raise ValueError(f"Conteúdo divergente em {nome}. Use outro esquema para uma nova amostra.")
-    else:
-        dbutils.fs.put(caminho, conteudo, overwrite=False)
-    print(f"Lote conferido: {nome}")
-
-print("5.000 transações prontas. Execute 01_ingestao_bronze.")
+dados.coalesce(1).write.mode("overwrite").option("header", True).csv(ENTRADA)
+print(f"Amostra criada: {dados.count()} registros. Execute o notebook 01.")
