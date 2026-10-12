@@ -1,199 +1,93 @@
-# 💳 Financial Transactions Lakehouse
-### End-to-End Data Engineering Project on Databricks
+# Lakehouse de transações financeiras
 
-![Databricks](https://img.shields.io/badge/Databricks-FF3621?style=for-the-badge&logo=Databricks&logoColor=white)
-![Delta Lake](https://img.shields.io/badge/Delta%20Lake-00ADD8?style=for-the-badge&logo=apachespark&logoColor=white)
-![Apache Spark](https://img.shields.io/badge/Apache%20Spark-E25A1C?style=for-the-badge&logo=apachespark&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![SQL](https://img.shields.io/badge/SQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
+Projeto **nível estagiário**, em português, para aprender PySpark, Delta Lake e a arquitetura medalhão no **Databricks Free Edition**.
 
----
+Adaptação do [projeto de Abhinav Mandal](https://github.com/abhinav2627/financial-transactions-lakehouse), por Lucas Marques. O histórico original foi preservado na branch `copia-original`.
 
-## 🏗️ Architecture
+## O que o projeto faz
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                  FINANCIAL TRANSACTIONS LAKEHOUSE                    │
-│                     Medallion Architecture                           │
-└─────────────────────────────────────────────────────────────────────┘
-
-  [Unity Catalog Volumes]
-  /landing/*.csv  (5,000 synthetic financial transactions)
-        │
-        ▼  Batch Ingestion (PySpark)
-  ┌─────────────────────────────────┐
-  │         BRONZE LAYER            │
-  │   bronze_transactions           │
-  │   • Raw data, no transforms     │
-  │   • + _ingest_timestamp         │
-  │   • + _source_file              │
-  │   • 5,000 rows                  │
-  └─────────────┬───────────────────┘
-                │
-                ▼  7 DQ Rules + Type Casting + Currency Normalisation
-  ┌─────────────────────────────────┐    ┌──────────────────────────┐
-  │         SILVER LAYER            │    │      QUARANTINE          │
-  │   silver_transactions           │    │   silver_quarantine      │
-  │   • Cleaned & typed             │    │   • Failed DQ rows       │
-  │   • USD normalised              │    │   • _quarantine_reason   │
-  │   • 4,929 rows (98.6% pass)     │    │   • 71 rows (1.4%)       │
-  └─────────────┬───────────────────┘    └──────────────────────────┘
-                │
-                ▼  Aggregations + Window Functions
-  ┌─────────────────────────────────┐    ┌──────────────────────────┐
-  │    GOLD LAYER — Merchant Agg    │    │   GOLD LAYER — KPIs      │
-  │   gold_merchant_agg             │    │   gold_daily_kpis        │
-  │   • Daily spend per merchant    │    │   • Daily revenue        │
-  │   • 100 rows                    │    │   • Failure rates        │
-  │                                 │    │   • Top categories       │
-  └─────────────────────────────────┘    └──────────────────────────┘
+```text
+CSV → Bronze → Silver → Gold
+                  ↓
+              Quarentena
 ```
 
----
+- **Bronze:** recebe os dados originais como texto.
+- **Silver:** limpa os dados, converte valores para USD e aplica regras de qualidade.
+- **Quarentena:** guarda linhas inválidas e duplicadas, com o motivo e os dados originais.
+- **Gold:** calcula indicadores por estabelecimento e por dia.
 
-## 📊 Results
+A execução é em lote: relê a amostra e atualiza as tabelas integralmente. Todos os dados são sintéticos. Não há streaming, API externa ou bibliotecas adicionais para instalar no Databricks.
 
-| Metric | Value |
+## Executar no Databricks
+
+1. Entre no seu [Databricks Free Edition](https://docs.databricks.com/aws/en/getting-started/free-edition).
+2. Importe os **seis arquivos `.py` da raiz como notebooks**, com os mesmos nomes e na **mesma pasta** do Workspace.
+3. No notebook `configuracao`, altere `CATALOGO = "workspace"` para o nome mostrado no explorador de catálogos. Você precisa poder criar esquema, volume e tabelas nesse catálogo.
+4. Conecte os notebooks ao processamento **Serverless**.
+5. Execute **00 → 01 → 02 → 03 → 04**, aguardando cada etapa terminar.
+
+| Arquivo | Etapa |
 |---|---|
-| Total Transactions Processed | 5,000 |
-| Clean Records (Silver) | 4,929 (98.6%) |
-| Quarantined Records | 71 (1.4%) |
-| Gold Tables Built | 2 |
-| Top Merchant by Spend | Shell ($84,731) |
-| Data Period | 10 days (Jan 2024) |
+| `configuracao.py` | Configuração compartilhada; os outros notebooks carregam com `%run` |
+| `00_configuracao_e_dados.py` | Criar esquema e volume; gerar 5.000 transações em dez CSVs |
+| `01_ingestao_bronze.py` | Ler os CSVs e salvar Bronze |
+| `02_limpeza_silver.py` | Limpar e separar Silver e quarentena |
+| `03_agregacoes_gold.py` | Calcular e salvar os indicadores |
+| `04_validacao.py` | Conferir contagens, IDs únicos e totais financeiros |
 
----
+Ao finalizar, a amostra padrão deve ter **5.000 linhas na Bronze, 4.800 na Silver e 200 na quarentena**. Esses números pertencem à amostra desta adaptação, não à amostra original.
 
-## 🛠️ Tech Stack
+### Pacote para importação
 
-| Tool | Purpose |
+Também é possível importar notebooks `.ipynb`. Para gerar os seis notebooks nesse formato e um ZIP:
+
+```powershell
+python scripts/empacotar_notebooks.py
+```
+
+Extraia `dist/notebooks_databricks_pt.zip` e importe os seis `.ipynb` na mesma pasta do Workspace. Não é necessário importar as duas versões.
+
+## Regras de qualidade
+
+| Regra | Condição |
 |---|---|
-| **Databricks Free Edition** | Cloud compute & notebooks |
-| **Delta Lake** | ACID transactions, time travel, schema enforcement |
-| **PySpark** | Data processing & transformations |
-| **Unity Catalog** | Data governance & storage (Volumes + Tables) |
-| **Databricks SQL** | Dashboard & visualization layer |
-| **Python 3.10** | Notebook language |
+| Valor positivo | Valor em USD maior que zero |
+| Limite de valor | Valor em USD menor que 50.000 |
+| ID de transação | Preenchido após remover espaços |
+| ID de usuário | Preenchido após remover espaços |
+| Situação | `concluida`, `pendente` ou `falhou` |
+| Data e hora | Válidas no formato `yyyy-MM-dd HH:mm:ss` |
+| Moeda | USD, EUR, GBP ou CAD |
+| Online | Texto `true` ou `false` |
+| ID único | Não repetido na amostra |
 
----
+Condições nulas reprovam a linha. Para simplificar, **todas as versões de um ID repetido vão à quarentena**. Nenhuma linha é descartada silenciosamente: **Bronze = Silver + quarentena**.
 
-## 📁 Project Structure
+Valores monetários usam `DECIMAL(18,2)`. Taxas fixas de exemplo: EUR × 1,08; GBP × 1,27; CAD × 0,74; USD × 1. Não são cotações atuais. Datas são interpretadas em UTC.
 
-```
-financial-transactions-lakehouse/
-│
-├── notebooks/
-│   ├── 00_setup_and_data_generation.py   # Generate synthetic data
-│   ├── 01_bronze_ingestion.py            # Raw ingestion → Bronze Delta table
-│   ├── 02_silver_cleaning_dq.py          # Cleaning + 7 DQ rules → Silver
-│   └── 03_gold_aggregations.py           # KPI aggregations → Gold tables
-│
-└── README.md
-```
+A coluna `_dados_originais` conserva os valores recebidos, e `_motivo` explica as reprovações. CSVs com cabeçalho ou estrutura incorreta interrompem a Bronze; a quarentena recebe valores inválidos em CSVs bem formados.
 
----
+## Indicadores
 
-## 🚀 How to Run
+- `gold_estabelecimentos`: uma linha por estabelecimento, categoria e data; quantidade, valor tentado, valor concluído e valor médio.
+- `gold_indicadores_diarios`: uma linha por data; quantidade, valor concluído, falhas, usuários ativos e percentual de falhas.
 
-### Prerequisites
-- Databricks Free Edition account ([sign up here](https://www.databricks.com/try-databricks))
-- Unity Catalog enabled (default on Free Edition)
+Valor tentado inclui todas as situações. Valor concluído inclui apenas `concluida`. Volume transacionado não representa receita da plataforma. Uma transação com situação `falhou` pode ter dados válidos e continuar na Silver.
 
-### Steps
+## Repetir e testar
 
-**1. Clone this repo**
-```bash
-git clone https://github.com/abhinav2627/financial-transactions-lakehouse.git
+A etapa 00 gera sempre a mesma amostra e confere os arquivos existentes. Ela interrompe a execução se encontrar conteúdo divergente. Para outra amostra, use outro `ESQUEMA`.
+
+As etapas 01, 02 e 03 **substituem os dados das tabelas do projeto**, mantendo o histórico Delta. Use o esquema dedicado `fintech_lakehouse_pt` e execute uma vez por vez. As tabelas são gravadas separadamente; se houver falha, repita a etapa afetada e as seguintes, terminando com a validação 04.
+
+Os testes locais são opcionais para quem só vai usar Databricks. Exigem Python 3.10 ou 3.11 e Java 11 ou 17:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest tests -q
 ```
 
-**2. Import notebooks to Databricks**
-- Go to Databricks Workspace → your folder
-- Click ⋮ → Import → File
-- Upload each `.py` file from the `notebooks/` folder
+Os testes verificam as transformações com Spark local e modo ANSI. **A execução no seu workspace Databricks ainda precisa ser feita**, para conferir permissões, volumes e tabelas Delta. A etapa 04 ajuda a conferir o resultado lá.
 
-**3. Set your catalog name**
-In each notebook, update:
-```python
-MY_CATALOG = "workspace"  # ← replace with your catalog name
-```
-
-**4. Run notebooks in order**
-```
-00 → 01 → 02 → 03
-```
-Connect each notebook to **Serverless** compute before running.
-
----
-
-## 🔍 Data Quality Framework
-
-7 rules applied to every row in the Silver layer:
-
-| Rule | Check | Action on Fail |
-|---|---|---|
-| `dq_valid_amount` | `amount_usd > 0` | Quarantine |
-| `dq_valid_amount_ceiling` | `amount_usd < 50,000` | Quarantine |
-| `dq_no_null_txn_id` | `transaction_id IS NOT NULL` | Quarantine |
-| `dq_no_null_user` | `user_id IS NOT NULL` | Quarantine |
-| `dq_valid_status` | status in (completed, pending, failed) | Quarantine |
-| `dq_valid_timestamp` | `txn_timestamp IS NOT NULL` | Quarantine |
-| `dq_valid_currency` | currency in (USD, EUR, GBP, CAD) | Quarantine |
-
-Failed rows are **never deleted** — they are written to `silver_quarantine` with a `_quarantine_reason` column explaining exactly which rules failed.
-
----
-
-## 📈 Gold Layer KPIs
-
-### `gold_merchant_agg` (Grain: merchant + date)
-- Total & completed transaction count
-- Gross spend in USD
-- Average & max transaction value
-- Unique users
-- Online transaction %
-- Failure rate %
-
-### `gold_daily_kpis` (Grain: date)
-- Daily revenue (completed transactions only)
-- Total transactions
-- Active unique users
-- Average transaction value
-- Failure rate %
-- Online share %
-- Top spending merchant category
-
----
-
-## 💡 Key Learnings
-
-- **Medallion Architecture** separates raw, clean, and business-ready data into distinct layers
-- **Delta Lake** provides ACID transactions, time travel, and schema enforcement out of the box
-- **Data Quality rules** should quarantine bad data rather than silently drop it — every row needs to be accounted for
-- **Unity Catalog Volumes** replace DBFS on modern Databricks workspaces for file storage
-- **Currency normalisation** at the Silver layer ensures all downstream Gold metrics are comparable
-
----
-
-## 🗺️ Roadmap
-
-This is **Project 1** of a 6-month data engineering portfolio series:
-
-- ✅ Project 1 — Financial Transactions Lakehouse (Databricks + Delta Lake)
-- 🔜 Project 2 — Real-Time NYC Taxi Pipeline (Kafka + Spark)
-- 🔜 Project 3 — COVID Data Warehouse (dbt + Snowflake + Airflow)
-- 🔜 Project 4 — E-Commerce ETL Pipeline (Python + PostgreSQL)
-- 🔜 Project 5 — Weather API Data Lake (AWS S3 + Lambda + Glue)
-
----
-
-## 👤 Author
-
-**Abhinav Mandal**
-- LinkedIn: https://www.linkedin.com/in/abhinavmandal27/
-- GitHub: https://github.com/abhinav2627
-
----
-
-## 📄 License
-
-MIT License — feel free to use this project as a template for your own portfolio.
+Detalhes das correções: [AUDITORIA.md](AUDITORIA.md). Créditos e origem: [ORIGEM.md](ORIGEM.md).
