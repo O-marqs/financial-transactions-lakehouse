@@ -1,8 +1,7 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 01 · Bronze: carregar os dados originais
-# MAGIC A camada Bronze guarda os registros como chegaram do CSV, sem limpeza.
-# MAGIC Também adicionamos a origem do arquivo e o horário de ingestão.
+# MAGIC # 01 · Bronze: ler o CSV
+# MAGIC A Bronze guarda os dados recebidos, sem fazer a limpeza.
 
 # COMMAND ----------
 
@@ -15,15 +14,25 @@ ENTRADA = f"/Volumes/{CATALOGO}/{ESQUEMA}/entrada/dados_basicos"
 
 # COMMAND ----------
 
-bronze = (
-    spark.read.option("header", True).option("inferSchema", False).csv(ENTRADA)
-    .select("*", F.col("_metadata.file_path").alias("arquivo_origem"))
-    .withColumn("data_ingestao", F.current_timestamp())
-)
+# MAGIC %md
+# MAGIC ## Ler os dados e registrar o horário
+# MAGIC As colunas entram como texto. Os tipos serão ajustados na Silver.
+
+# COMMAND ----------
+
+bronze = spark.read.option("header", True).csv(ENTRADA)
+bronze = bronze.withColumn("data_ingestao", F.current_timestamp())
+display(bronze.limit(5))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Salvar a tabela Delta
+# MAGIC Delta é o formato das tabelas deste projeto.
+
+# COMMAND ----------
 
 bronze.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(
     f"{BASE}.bronze_transacoes"
 )
-
-display(spark.table(f"{BASE}.bronze_transacoes").limit(5))
-print(f"Bronze: {bronze.count()} registros. Execute o notebook 02.")
+print("Bronze salva. Execute o notebook 02.")

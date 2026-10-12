@@ -1,8 +1,7 @@
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # 02 · Silver: limpar os dados
-# MAGIC Vamos ajustar os tipos, remover espaços, filtrar registros inválidos e tirar duplicatas.
-# MAGIC Os registros originais continuam disponíveis na Bronze.
+# MAGIC Vamos ajustar os tipos, remover espaços e tirar os registros inválidos e duplicados.
 
 # COMMAND ----------
 
@@ -16,47 +15,43 @@ bronze = spark.table(f"{BASE}.bronze_transacoes")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Ajustar os tipos e os textos
-# MAGIC `try_cast` transforma um valor inválido em nulo, permitindo filtrar a linha depois.
-# MAGIC Usamos decimal para dinheiro e date para a data da transação.
+# MAGIC ## Ajustar os tipos e remover espaços
+# MAGIC `try_cast` converte o texto em número ou data. Se não conseguir, o resultado fica nulo.
+# MAGIC `trim` remove espaços nas pontas do texto.
 
 # COMMAND ----------
 
-tratados = (
-    bronze.withColumn("valor", F.expr("try_cast(valor AS DECIMAL(12,2))"))
-    .withColumn("data_transacao", F.expr("try_cast(data_transacao AS DATE)"))
-    .withColumn("id_transacao", F.trim(F.col("id_transacao")))
-    .withColumn("id_usuario", F.trim(F.col("id_usuario")))
-    .withColumn("estabelecimento", F.trim(F.col("estabelecimento")))
-    .withColumn("categoria", F.lower(F.trim(F.col("categoria"))))
-    .withColumn("situacao", F.lower(F.trim(F.col("situacao"))))
-)
+dados = bronze.withColumn("valor", F.expr("try_cast(valor AS DECIMAL(12,2))"))
+dados = dados.withColumn("data_transacao", F.expr("try_cast(data_transacao AS DATE)"))
+dados = dados.withColumn("id_transacao", F.trim("id_transacao"))
+dados = dados.withColumn("id_usuario", F.trim("id_usuario"))
+dados = dados.withColumn("estabelecimento", F.trim("estabelecimento"))
+dados = dados.withColumn("situacao", F.lower(F.trim("situacao")))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Manter os registros válidos
-# MAGIC IDs preenchidos, valor positivo, data válida e situação conhecida.
-# MAGIC As duplicatas da amostra são cópias iguais; mantemos apenas uma por ID.
+# MAGIC ## Filtrar e remover duplicatas
+# MAGIC Cada linha aplica uma condição. Os dados recebidos continuam guardados na Bronze.
 
 # COMMAND ----------
 
-silver = (
-    tratados.filter(
-        (F.length("id_transacao") > 0)
-        & (F.length("id_usuario") > 0)
-        & (F.col("valor") > 0)
-        & F.col("data_transacao").isNotNull()
-        & F.col("situacao").isin("concluida", "pendente", "falhou")
-    )
-    .dropDuplicates(["id_transacao"])
-)
+silver = dados.filter(F.col("valor") > 0)
+silver = silver.filter(F.length("id_transacao") > 0)
+silver = silver.filter(F.length("id_usuario") > 0)
+silver = silver.filter(F.col("data_transacao").isNotNull())
+silver = silver.filter(F.col("situacao").isin("concluida", "pendente", "falhou"))
+silver = silver.dropDuplicates(["id_transacao"])
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Salvar a Silver
+
+# COMMAND ----------
 
 silver.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(
     f"{BASE}.silver_transacoes"
 )
-
-print(f"Antes da limpeza: {bronze.count()} registros")
-print(f"Depois da limpeza: {silver.count()} registros")
-display(spark.table(f"{BASE}.silver_transacoes").limit(5))
-print("Execute o notebook 03.")
+display(silver.limit(5))
+print("Silver salva. Execute o notebook 03.")

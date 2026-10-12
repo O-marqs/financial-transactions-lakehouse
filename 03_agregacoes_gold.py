@@ -1,9 +1,8 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 03 · Gold: criar indicadores com SQL
-# MAGIC A camada Gold resume os dados para análise.
-# MAGIC Vamos usar SELECT, WHERE, GROUP BY, COUNT, SUM e AVG.
-# MAGIC Os indicadores consideram apenas transações concluídas e os valores estão em BRL.
+# MAGIC # 03 · Gold: resumir os dados com SQL
+# MAGIC Vamos contar e somar as transações concluídas por loja e por dia.
+# MAGIC Os valores estão em reais.
 
 # COMMAND ----------
 
@@ -11,27 +10,27 @@ CATALOGO = "workspace"  # Use o mesmo catálogo do notebook 00.
 ESQUEMA = "fintech_lakehouse_pt"
 BASE = f"`{CATALOGO}`.`{ESQUEMA}`"
 
-# Uma visão temporária permite consultar o DataFrame nas células SQL abaixo.
-spark.table(f"{BASE}.silver_transacoes").createOrReplaceTempView("transacoes")
-
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Resumo por estabelecimento
+# MAGIC ## Resumo por loja
+# MAGIC `WHERE` escolhe as transações concluídas. `GROUP BY` reúne os registros de cada loja.
+# MAGIC `COUNT` conta, `SUM` soma e `AVG` calcula a média.
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE TEMP VIEW resumo_estabelecimentos AS
-# MAGIC SELECT
-# MAGIC   estabelecimento,
-# MAGIC   categoria,
-# MAGIC   COUNT(*) AS transacoes_concluidas,
-# MAGIC   SUM(valor) AS valor_total_brl,
-# MAGIC   ROUND(AVG(valor), 2) AS ticket_medio_brl
-# MAGIC FROM transacoes
-# MAGIC WHERE situacao = 'concluida'
-# MAGIC GROUP BY estabelecimento, categoria
+resumo_lojas = spark.sql(f"""
+    SELECT
+        estabelecimento,
+        COUNT(*) AS quantidade,
+        SUM(valor) AS valor_total,
+        ROUND(AVG(valor), 2) AS valor_medio
+    FROM {BASE}.silver_transacoes
+    WHERE situacao = 'concluida'
+    GROUP BY estabelecimento
+    ORDER BY valor_total DESC
+""")
+display(resumo_lojas)
 
 # COMMAND ----------
 
@@ -40,38 +39,29 @@ spark.table(f"{BASE}.silver_transacoes").createOrReplaceTempView("transacoes")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE OR REPLACE TEMP VIEW resumo_diario AS
-# MAGIC SELECT
-# MAGIC   data_transacao,
-# MAGIC   COUNT(*) AS transacoes_concluidas,
-# MAGIC   SUM(valor) AS valor_total_brl,
-# MAGIC   COUNT(DISTINCT id_usuario) AS usuarios_ativos
-# MAGIC FROM transacoes
-# MAGIC WHERE situacao = 'concluida'
-# MAGIC GROUP BY data_transacao
+resumo_diario = spark.sql(f"""
+    SELECT
+        data_transacao,
+        COUNT(*) AS quantidade,
+        SUM(valor) AS valor_total
+    FROM {BASE}.silver_transacoes
+    WHERE situacao = 'concluida'
+    GROUP BY data_transacao
+    ORDER BY data_transacao
+""")
+display(resumo_diario)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Salvar as tabelas Gold com PySpark
+# MAGIC ## Salvar as tabelas Gold
 
 # COMMAND ----------
 
-spark.table("resumo_estabelecimentos").write.format("delta").mode("overwrite").option(
-    "overwriteSchema", "true"
-).saveAsTable(f"{BASE}.gold_estabelecimentos")
-
-spark.table("resumo_diario").write.format("delta").mode("overwrite").option(
-    "overwriteSchema", "true"
-).saveAsTable(f"{BASE}.gold_indicadores_diarios")
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT * FROM resumo_estabelecimentos ORDER BY valor_total_brl DESC
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC SELECT * FROM resumo_diario ORDER BY data_transacao
+resumo_lojas.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(
+    f"{BASE}.gold_estabelecimentos"
+)
+resumo_diario.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(
+    f"{BASE}.gold_indicadores_diarios"
+)
+print("Gold salva. Projeto concluído.")
